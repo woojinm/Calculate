@@ -1,0 +1,84 @@
+import java.io.*;
+import java.net.*;
+import java.util.*;
+
+/**
+ * C_Client: simple text-protocol calculator client.
+ * - User types "ADD 10 20" etc.
+ * - Client sends "REQ ADD 10 20" to server and prints "RES ...".
+ * - Type "EXIT" to finish (sends "QUIT" once, then closes).
+ */
+public class C_Client {
+
+    public static void main(String[] args) {
+        // Load host:port from server_info.dat (fallback: localhost:12345)
+        HostPort hp = load("server_info.dat");
+        System.out.println("[Client] " + hp.host + ":" + hp.port);
+
+        // Auto-close resources
+        try (Socket sock = new Socket(hp.host, hp.port);
+             BufferedReader in = new BufferedReader(new InputStreamReader(sock.getInputStream()));
+             BufferedWriter out = new BufferedWriter(new OutputStreamWriter(sock.getOutputStream()));
+             Scanner sc = new Scanner(System.in)) {
+
+            System.out.println("Examples: ADD 10 20 / MIN 7 3 / MUL 2 4 / DIV 8 2  (EXIT to quit)");
+
+            while (true) {
+                System.out.print("> ");
+                if (!sc.hasNextLine()) break;
+                String user = sc.nextLine().trim();
+
+                // Quit: send QUIT, read final response, then exit
+                if (user.equalsIgnoreCase("EXIT")) {
+                    out.write("QUIT\n");
+                    out.flush();
+                    String last = in.readLine();
+                    if (last != null) System.out.println(last);
+                    break;
+                }
+
+                // Expect exactly 3 tokens: OP A B
+                String[] t = user.split("\\s+");
+                if (t.length != 3) {
+                    System.out.println("Usage: <OP> <A> <B>");
+                    continue;
+                }
+
+                // Build request line: REQ <OP> <A> <B>
+                String req = "REQ " + t[0].toUpperCase() + " " + t[1] + " " + t[2];
+
+                // Send request (line-based protocol -> must end with newline)
+                out.write(req + "\n");
+                out.flush();
+
+                // Read one-line response: RES OK ... or RES ERR ...
+                String resp = in.readLine();
+                if (resp == null) {                      // server closed
+                    System.out.println("[Client] server closed");
+                    break;
+                }
+                System.out.println(resp);
+            }
+        } catch (IOException e) {
+            System.err.println("[Client] " + e.getMessage());
+        }
+    }
+
+    // --- server_info.dat loader --------------------------------------------
+    // Format: host:port (e.g., localhost:12345). Fallback to localhost:12345.
+    static class HostPort { final String host; final int port; HostPort(String h,int p){host=h;port=p;} }
+
+    static HostPort load(String path) {
+        File f = new File(path);
+        if (!f.exists()) return new HostPort("localhost", 12345);
+        try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+            String line = br.readLine();
+            if (line == null) return new HostPort("localhost", 12345);
+            String[] hp = line.trim().split(":");
+            if (hp.length != 2) return new HostPort("localhost", 12345);
+            return new HostPort(hp[0].trim(), Integer.parseInt(hp[1].trim()));
+        } catch (Exception e) {
+            return new HostPort("localhost", 12345);
+        }
+    }
+}
