@@ -1,0 +1,121 @@
+import java.io.*;
+import java.net.*;
+import java.util.concurrent.*;
+
+/**
+ * C_Server: text-protocol calculator server.
+ * - Line-based TCP protocol: client sends "REQ <OP> <A> <B>"
+ * - Server replies "RES OK value=..." or "RES ERR code=... msg=..."
+ * - Supports ADD, MIN, MUL, DIV (DIV by zero -> error)
+ * - Handles multiple clients via ThreadPool + Runnable
+ */
+public class C_Server {
+
+    // Handles one client connection (Runnable)
+    static class ClientTask implements Runnable {
+        private final Socket sock;
+        ClientTask(Socket s) { this.sock = s; }
+
+        @Override public void run() {
+            try (BufferedReader in  = new BufferedReader(new InputStreamReader(sock.getInputStream()));
+                 BufferedWriter out = new BufferedWriter(new OutputStreamWriter(sock.getOutputStream()))) {
+
+                System.out.println("[Server] connected: " + sock.getRemoteSocketAddress());
+
+                String line;
+                while ((line = in.readLine()) != null) {
+                    String req = line.trim();
+
+                    // Graceful close from client
+                    if (req.equalsIgnoreCase("QUIT")) {
+                        System.out.println("[Server] recv=QUIT -> send=" + ok(0.0));
+                        write(out, ok(0.0));
+                        break;
+                    }
+
+                    // Expect: REQ OP A B
+                    if (!req.startsWith("REQ ")) {
+                        System.out.println("[Server] recv='" + req + "' -> BAD_ARGS");
+                        write(out, err("BAD_ARGS","must start with REQ"));
+                        continue;
+                    }
+                    String[] t = req.split("\\s+");
+                    if (t.length != 4) {
+                        System.out.println("[Server] recv='" + req + "' -> BAD_ARGS(len)");
+                        write(out, err("BAD_ARGS","need: REQ <OP> <A> <B>"));
+                        continue;
+                    }
+
+                    // Validate op
+                    String op = t[1].toUpperCase(); // ADD, MIN, MUL, DIV
+                    if (!(op.equals("ADD") || op.equals("MIN") || op.equals("MUL") || op.equals("DIV"))) {
+                        System.out.println("[Server] recv='" + req + "' -> UNSUPPORTED_OP(" + op + ")");
+                        write(out, err("UNSUPPORTED_OP", op));
+                        continue;
+                    }
+
+                    // Parse numbers
+                    double a, b;
+                    try { a = Double.parseDouble(t[2]); b = Double.parseDouble(t[3]); }
+                    catch (NumberFormatException e) {
+                        System.out.println("[Server] recv='" + req + "' -> BAD_ARGS(numfmt)");
+                        write(out, err("BAD_ARGS","number format"));
+                        continue;
+                    }
+
+                    // Division by zero check
+                    if (op.equals("DIV") && b == 0.0) {
+                        System.out.println("[Server] recv='" + req + "' -> DIV_ZERO");
+                        write(out, err("DIV_ZERO","DIV_ZERO"));
+                        continue;
+                    }
+
+                    // Compute result
+                    double ans = op.equals("ADD") ? a + b :
+                                 op.equals("MIN") ? a - b :
+                                 op.equals("MUL") ? a * b :
+                                                    a / b; // DIV
+
+                    String okMsg = ok(ans);
+                    System.out.println("[Server] recv='" + req + "' -> send='" + okMsg + "'");
+                    write(out, okMsg);
+                }
+            } catch (IOException ignore) {
+                // connection dropped or I/O error
+            } finally {
+                try { sock.close(); } catch (IOException ignore) {}
+                System.out.println("[Server] closed: " + sock.getRemoteSocketAddress());
+            }
+        }
+
+        // Write one line (flush)
+        private static void write(BufferedWriter out, String s) throws IOException {
+            out.write(s); out.write("\n"); out.flush();
+        }
+        // Build OK/ERR lines
+        private static String ok(double v)  { return "RES OK value=" + v; }
+        private static String err(String c, String m){ return "RES ERR code=" + c + " msg=" + (m==null?"":m); }
+    }
+
+    public static void main(String[] args) {
+        int port = 12345; // default port
+        if (args.length > 0) try { port = Integer.parseInt(args[0]); } catch (Exception ignore) {}
+        int poolSize = Math.max(4, Runtime.getRuntime().availableProcessors()*2);
+
+        System.out.println("[Server] listen " + port + " (pool=" + poolSize + ")");
+        ExecutorService pool = Executors.newFixedThreadPool(poolSize);
+
+        // Accept clients forever
+        try (ServerSocket server = new ServerSocket(port)) {
+            while (true) {
+                Socket sock = server.accept();
+                System.out.println("[Server] accepted: " + sock.getRemoteSocketAddress());
+                pool.execute(new ClientTask(sock)); // ThreadPool + Runnable
+            }
+        } catch (IOException e) {
+            System.err.println("[Server] " + e.getMessage());
+        } finally {
+            pool.shutdown();
+        }
+    }
+}
