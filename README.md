@@ -1,2 +1,2 @@
 # Calculate
-<computer network assignment>
+computer network assignment
